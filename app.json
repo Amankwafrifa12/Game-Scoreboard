@@ -1,29 +1,63 @@
 {
   "expo": {
-    "name": "Discount",
-    "slug": "Discount",
+    "name": "Board Game Scoreboard",
+    "slug": "BoardGameScoreboard",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "description": "Simple scoreboard for tracking two players during board games and card games. Easy-to-use plus and minus buttons to keep score.",
+    "privacy": "public",
+    "platforms": [
+      "android"
+    ],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#2c3e50"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.bpidjetpktortg.app"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#2c3e50"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.bpidjetpktortg.app",
+      "versionCode": 1,
+      "permissions": [],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "storeListing": {
+        "shortDescription": "Track scores for two players during board games",
+        "fullDescription": "Board Game Scoreboard is a simple and intuitive score tracker for two-player board games and card games. Keep track of points with large, easy-to-tap plus and minus buttons.\n\nFeatures:\n• Two-player score tracking\n• Large, easy-to-use buttons\n• Reset scores instantly\n• Clean, distraction-free interface\n• No ads or tracking\n• Works completely offline\n• Free forever\n\nPrivacy: This app does not collect, store, or transmit any personal data. All scores are stored locally on your device.",
+        "category": "TOOLS",
+        "contactEmail": "support@schedulefor.com",
+        "privacyPolicyUrl": "https://schedulefor.com/privacy"
+      },
+      "eas": {
+        "projectId": "069914fc-034b-462c-8107-ab2cfc826ebf"
+      }
+    },
+    "owner": "genielab"
   }
 }

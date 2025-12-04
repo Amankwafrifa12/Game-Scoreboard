@@ -1,0 +1,31 @@
+# Splash Screen Design Guidelines
+
+## Current Configuration
+- Background Color: #667eea (Solid Purple)
+- Icon: 💰 Money Bag Emoji or Custom Icon
+- Text: "Discount Calculator"
+
+## Recommended Splash Screen Setup
+
+### For splash-icon.png:
+Create a 1242x2436 pixel PNG image with:
+- Solid background color: #667eea
+- Large centered icon (white or light color)
+- App name in white text below icon
+- Clean, minimal design
+
+### Design Elements:
+1. Background: Solid #667eea (purple)
+2. Icon: 💰 or custom calculator icon (white/cream color)
+3. App Name: "Discount Calculator" in white, bold font
+4. Optional tagline: "Calculate Your Savings" in smaller text
+
+### Tools to Create:
+- Canva
+- Figma
+- Adobe Illustrator
+- Or use online splash screen generators
+
+### Quick Setup with Expo:
+Run: npx expo install expo-splash-screen
+Configure in app.json (already set with solid color)
