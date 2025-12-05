@@ -1,91 +1,64 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TouchableOpacity, Modal, TextInput, Switch, FlatList, Alert, Dimensions } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, Modal, TextInput, Switch, FlatList, Alert, Dimensions, ScrollView } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
+const { width, height } = Dimensions.get('window');
+const PLAYER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F'];
+
 export default function App() {
-  const [player1Score, setPlayer1Score] = useState(0);
-  const [player2Score, setPlayer2Score] = useState(0);
-  const [player1Name, setPlayer1Name] = useState('Player 1');
-  const [player2Name, setPlayer2Name] = useState('Player 2');
-  const [settingsVisible, setSettingsVisible] = useState(false);
-  const [step, setStep] = useState(1);
-  const [historyVisible, setHistoryVisible] = useState(false);
-  const [actionHistory, setActionHistory] = useState([]);
+  // Game state
+  const [gameState, setGameState] = useState('setup'); // setup, playing, finished
+  const [players, setPlayers] = useState([
+    { id: 1, name: 'Player 1', score: 0, color: PLAYER_COLORS[0] },
+    { id: 2, name: 'Player 2', score: 0, color: PLAYER_COLORS[1] },
+  ]);
+  const [currentTurn, setCurrentTurn] = useState(0);
+  const [round, setRound] = useState(1);
+  const [timeElapsed, setTimeElapsed] = useState(0);
+  const [timerActive, setTimerActive] = useState(false);
+  const [gameHistory, setGameHistory] = useState([]);
+  const [showStats, setShowStats] = useState(false);
   const [darkTheme, setDarkTheme] = useState(true);
+  const [fullscreenMode, setFullscreenMode] = useState(false);
+  const [finalResult, setFinalResult] = useState(null);
+
+  // UI state
+  const [setupModal, setSetupModal] = useState(false);
+  const [newPlayerName, setNewPlayerName] = useState('');
+  const [settingsModal, setSettingsModal] = useState(false);
+  const [statsModal, setStatsModal] = useState(false);
+
+  const timerIntervalRef = useRef(null);
   const undoStackRef = useRef([]);
 
-  const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-  const isLandscape = screenWidth > screenHeight;
-  const isSmallScreen = screenWidth < 360;
-
-  // Responsive sizing
-  const responsive = {
-    headerFontSize: isSmallScreen ? 20 : 28,
-    playerLabelFontSize: isSmallScreen ? 18 : 22,
-    scoreFontSize: isSmallScreen ? 48 : 72,
-    buttonSize: isSmallScreen ? 80 : 100,
-    buttonIconSize: isSmallScreen ? 32 : 42,
-    scoreDisplaySize: isSmallScreen ? 120 : 140,
-    modalPadding: isSmallScreen ? 15 : 20,
-    modalTitleFontSize: isSmallScreen ? 18 : 22,
-  };
-
-  const addScore = (player, amount) => {
-    Haptics.selectionAsync();
-    const prev = { p1: player1Score, p2: player2Score };
-    undoStackRef.current.push(prev);
-    const action = { time: Date.now(), player, amount };
-    setActionHistory((h) => [action, ...h].slice(0, 50));
-    if (player === 1) {
-      setPlayer1Score((s) => s + amount);
+  // Timer effect
+  useEffect(() => {
+    if (timerActive && gameState === 'playing') {
+      timerIntervalRef.current = setInterval(() => {
+        setTimeElapsed((t) => t + 1);
+      }, 1000);
     } else {
-      setPlayer2Score((s) => s + amount);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     }
-  };
-
-  const resetScores = () => {
-    Alert.alert('Reset Scores', 'Reset both scores to 0?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Reset', style: 'destructive', onPress: () => {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        undoStackRef.current.push({ p1: player1Score, p2: player2Score });
-        setPlayer1Score(0);
-        setPlayer2Score(0);
-        setActionHistory((h) => [{ time: Date.now(), player: 0, amount: 0, note: 'reset' }, ...h].slice(0,50));
-      } }
-    ]);
-  };
-
-  const undo = () => {
-    const last = undoStackRef.current.pop();
-    if (!last) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      return;
-    }
-    setPlayer1Score(last.p1);
-    setPlayer2Score(last.p2);
-    setActionHistory((h) => [{ time: Date.now(), player: 0, amount: 0, note: 'undo' }, ...h].slice(0,50));
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  };
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [timerActive, gameState]);
 
   // Persistence
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem('@bgs_state');
-        if (raw) {
-          const obj = JSON.parse(raw);
-          setPlayer1Score(obj.p1 ?? 0);
-          setPlayer2Score(obj.p2 ?? 0);
-          setPlayer1Name(obj.p1name ?? 'Player 1');
-          setPlayer2Name(obj.p2name ?? 'Player 2');
-          setStep(obj.step ?? 1);
-          setActionHistory(obj.history ?? []);
-          setDarkTheme(obj.dark ?? true);
+        const saved = await AsyncStorage.getItem('@gsa_state');
+        if (saved) {
+          const data = JSON.parse(saved);
+          setPlayers(data.players || players);
+          setGameHistory(data.history || []);
+          setDarkTheme(data.darkTheme ?? true);
         }
       } catch (e) {
         console.warn('Failed to load state', e);
@@ -96,155 +69,409 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const obj = { p1: player1Score, p2: player2Score, p1name: player1Name, p2name: player2Name, step, history: actionHistory, dark: darkTheme };
-        await AsyncStorage.setItem('@bgs_state', JSON.stringify(obj));
+        await AsyncStorage.setItem('@gsa_state', JSON.stringify({ players, gameHistory, darkTheme }));
       } catch (e) {
         console.warn('Failed to save state', e);
       }
     })();
-  }, [player1Score, player2Score, player1Name, player2Name, step, actionHistory, darkTheme]);
+  }, [players, gameHistory, darkTheme]);
 
-  const clearHistory = async () => {
-    setActionHistory([]);
-    await AsyncStorage.mergeItem('@bgs_state', JSON.stringify({ history: [] }));
+  // Actions
+  const addScore = (playerId, amount) => {
+    Haptics.selectionAsync();
+    setPlayers((prev) => {
+      const updated = [...prev];
+      const idx = updated.findIndex((p) => p.id === playerId);
+      if (idx >= 0) {
+        undoStackRef.current.push([...updated]);
+        updated[idx].score += amount;
+      }
+      return updated;
+    });
   };
 
+  const undo = () => {
+    const prev = undoStackRef.current.pop();
+    if (prev) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setPlayers(prev);
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    }
+  };
+
+  const addPlayer = () => {
+    if (!newPlayerName.trim() || players.length >= 6) return;
+    const newId = Math.max(...players.map((p) => p.id), 0) + 1;
+    const newPlayer = {
+      id: newId,
+      name: newPlayerName,
+      score: 0,
+      color: PLAYER_COLORS[players.length % PLAYER_COLORS.length],
+    };
+    setPlayers([...players, newPlayer]);
+    setNewPlayerName('');
+    Haptics.selectionAsync();
+  };
+
+  const removePlayer = (id) => {
+    if (players.length <= 1) return;
+    setPlayers(players.filter((p) => p.id !== id));
+    if (currentTurn >= players.length - 1) setCurrentTurn(0);
+  };
+
+  const startGame = () => {
+    setFinalResult(null);
+    setGameState('playing');
+    setRound(1);
+    setTimeElapsed(0);
+    setCurrentTurn(0);
+    setTimerActive(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const endGame = () => {
+    setTimerActive(false);
+
+    const topScore = players.length ? Math.max(...players.map((p) => p.score)) : 0;
+    const leaders = players.filter((p) => p.score === topScore);
+    const winnerNames = leaders.map((p) => p.name);
+
+    setFinalResult({
+      winners: leaders.map((p) => ({ ...p })),
+      topScore,
+      isTie: winnerNames.length > 1,
+    });
+
+    setGameHistory((h) => [
+      ...h,
+      {
+        id: Date.now(),
+        players: players.map((p) => ({ ...p })),
+        winners: winnerNames,
+        topScore,
+        result: winnerNames.length > 1 ? 'tie' : 'winner',
+        timestamp: new Date().toLocaleString(),
+        duration: timeElapsed,
+        round,
+      },
+    ]);
+
+    setGameState('finished');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const goToSetup = () => {
+    setFinalResult(null);
+    setGameState('setup');
+  };
+
+  const resetGame = () => {
+    Alert.alert('Reset Game', 'Start a new game?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'New Game',
+        onPress: () => {
+          setPlayers(players.map((p) => ({ ...p, score: 0 })));
+          setGameState('setup');
+          setRound(1);
+          setTimeElapsed(0);
+          setCurrentTurn(0);
+          undoStackRef.current = [];
+          setFinalResult(null);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        },
+      },
+    ]);
+  };
+
+  const formatTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Responsive layout
+  const numPlayers = players.length;
+  const playerColsCount = numPlayers <= 2 ? 2 : numPlayers <= 4 ? 2 : 3;
+  const playerCardWidth = (width - 40) / playerColsCount;
+
+  if (gameState === 'setup') {
+    return (
+      <View style={[styles.container, darkTheme ? styles.darkBg : styles.lightBg]}>
+        <LinearGradient
+          colors={darkTheme ? ['#1a1a2e', '#16213e'] : ['#f5f7fa', '#e9ecef']}
+          style={styles.gradient}
+        >
+          <StatusBar style={darkTheme ? 'light' : 'dark'} />
+          
+          <View style={styles.setupHeader}>
+            <MaterialIcons name="casino" size={48} color={darkTheme ? '#fff' : '#333'} />
+            <Text style={[styles.title, darkTheme ? styles.textLight : styles.textDark]}>Game Scoreboard</Text>
+            <Text style={[styles.subtitle, darkTheme ? styles.textLightSub : styles.textDarkSub]}>Add players and start playing</Text>
+          </View>
+
+          <ScrollView style={styles.setupContent} contentContainerStyle={styles.setupContentInner}>
+            <View style={styles.playerList}>
+              {players.map((player) => (
+                <View key={player.id} style={styles.setupPlayerItem}>
+                  <View style={[styles.playerColorDot, { backgroundColor: player.color }]} />
+                  <Text style={[styles.setupPlayerName, darkTheme ? styles.textLight : styles.textDark]}>{player.name}</Text>
+                  {players.length > 1 && (
+                    <TouchableOpacity onPress={() => removePlayer(player.id)} style={styles.removeBtn}>
+                      <MaterialIcons name="close" size={20} color="#e74c3c" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+            </View>
+
+            {players.length < 6 && (
+              <View style={styles.addPlayerSection}>
+                <TextInput
+                  style={[styles.playerInput, darkTheme ? styles.inputDark : styles.inputLight]}
+                  placeholder="Enter player name"
+                  placeholderTextColor={darkTheme ? '#999' : '#ccc'}
+                  value={newPlayerName}
+                  onChangeText={setNewPlayerName}
+                  onSubmitEditing={addPlayer}
+                />
+                <TouchableOpacity style={styles.addBtn} onPress={addPlayer}>
+                  <MaterialIcons name="add" size={24} color="#fff" />
+                  <Text style={styles.addBtnText}>Add Player</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={styles.setupActions}>
+              <TouchableOpacity style={styles.startBtn} onPress={startGame}>
+                <MaterialIcons name="play-arrow" size={28} color="#fff" />
+                <Text style={styles.startBtnText}>Start Game</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </LinearGradient>
+      </View>
+    );
+  }
+
+  if (gameState === 'finished') {
+    const computedWinners = (() => {
+      if (finalResult?.winners?.length) {
+        return finalResult.winners;
+      }
+      if (!players.length) return [];
+      const top = Math.max(...players.map((p) => p.score));
+      return players.filter((p) => p.score === top);
+    })();
+
+    const topScore = finalResult?.topScore ?? (computedWinners[0]?.score ?? 0);
+    const isTie = finalResult?.isTie ?? computedWinners.length > 1;
+    const primaryWinner = computedWinners[0];
+
+    return (
+      <View style={[styles.container, darkTheme ? styles.darkBg : styles.lightBg]}>
+        <LinearGradient colors={darkTheme ? ['#1a1a2e', '#16213e'] : ['#f5f7fa', '#e9ecef']} style={styles.gradient}>
+          <StatusBar style={darkTheme ? 'light' : 'dark'} />
+          
+          <ScrollView contentContainerStyle={styles.finishedContent}>
+            <View style={styles.finishedHeader}>
+              <MaterialIcons name="emoji-events" size={64} color="#FFD700" />
+              <Text style={[styles.finishedTitle, darkTheme ? styles.textLight : styles.textDark]}>Game Over!</Text>
+              {isTie ? (
+                <>
+                  <Text style={[styles.winnerName, darkTheme ? styles.textLight : styles.textDark]}>It's a tie!</Text>
+                  <Text style={[styles.winnerScore, darkTheme ? styles.textLightSub : styles.textDarkSub]}>Top Score: {topScore}</Text>
+                  <View style={styles.tieNames}>
+                    {computedWinners.map((winner) => (
+                      <Text key={winner.id} style={[styles.tieName, { color: winner.color }]}>
+                        {winner.name}
+                      </Text>
+                    ))}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.winnerName, { color: primaryWinner?.color ?? '#fff' }]}>{primaryWinner?.name ?? 'Winner'} Wins!</Text>
+                  <Text style={[styles.winnerScore, darkTheme ? styles.textLightSub : styles.textDarkSub]}>Score: {primaryWinner?.score ?? topScore}</Text>
+                </>
+              )}
+            </View>
+
+            <View style={styles.finalScores}>
+              {players.map((player) => (
+                <View key={player.id} style={styles.finalScoreItem}>
+                  <View style={[styles.playerColorDot, { backgroundColor: player.color, width: 16, height: 16 }]} />
+                  <Text style={[styles.finalPlayerName, darkTheme ? styles.textLight : styles.textDark]}>{player.name}</Text>
+                  <Text style={[styles.finalScore, darkTheme ? styles.textLight : styles.textDark]}>{player.score}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.gameStats}>
+              <Text style={[styles.statLabel, darkTheme ? styles.textLight : styles.textDark]}>Duration: {formatTime(timeElapsed)}</Text>
+              <Text style={[styles.statLabel, darkTheme ? styles.textLight : styles.textDark]}>Rounds Played: {round}</Text>
+            </View>
+
+            <View style={styles.finishedActions}>
+              <TouchableOpacity style={styles.newGameBtn} onPress={resetGame}>
+                <MaterialIcons name="add-circle" size={24} color="#fff" />
+                <Text style={styles.newGameBtnText}>New Game</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.editBtn} onPress={goToSetup}>
+                <MaterialIcons name="edit" size={24} color="#fff" />
+                <Text style={styles.editBtnText}>Edit Players</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </LinearGradient>
+      </View>
+    );
+  }
+
+  // Playing state
   return (
-    <View style={[styles.container, darkTheme ? styles.darkBg : styles.lightBg]}>
-      <LinearGradient
-        colors={darkTheme ? ['#2c3e50', '#34495e'] : ['#ffffff', '#f0f4f8']}
-        style={styles.gradient}
-      >
-        <StatusBar style={darkTheme ? 'light' : 'dark'} />
+    <View style={[styles.container, darkTheme ? styles.darkBg : styles.lightBg, fullscreenMode && styles.fullscreen]}>
+      <LinearGradient colors={darkTheme ? ['#1a1a2e', '#16213e'] : ['#f5f7fa', '#e9ecef']} style={styles.gradient}>
+        <StatusBar style={darkTheme ? 'light' : 'dark'} hidden={fullscreenMode} />
 
-        <View style={[styles.headerRow, isLandscape && styles.headerRowLandscape]}>
-          <View style={styles.headerLeft}>
-            <MaterialIcons name="casino" size={isSmallScreen ? 28 : 36} color={darkTheme ? '#fff' : '#333'} />
-            <Text style={[styles.headerTitle, darkTheme ? styles.headerTitleLight : styles.headerTitleDark, { fontSize: responsive.headerFontSize }]}>Board Game Scoreboard</Text>
+        {!fullscreenMode && (
+          <View style={styles.playingHeader}>
+            <View style={styles.headerLeft}>
+              <TouchableOpacity style={styles.headerBtn} onPress={undo}>
+                <MaterialIcons name="undo" size={24} color={darkTheme ? '#fff' : '#333'} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerBtn} onPress={() => setShowStats(!showStats)}>
+                <MaterialIcons name="bar-chart" size={24} color={darkTheme ? '#fff' : '#333'} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.headerCenter}>
+              <View style={styles.roundInfo}>
+                <Text style={[styles.roundLabel, darkTheme ? styles.textLight : styles.textDark]}>Round {round}</Text>
+              </View>
+              <View style={styles.timerDisplay}>
+                <MaterialIcons name="schedule" size={16} color={darkTheme ? '#fff' : '#333'} />
+                <Text style={[styles.timerText, darkTheme ? styles.textLight : styles.textDark]}>{formatTime(timeElapsed)}</Text>
+              </View>
+            </View>
+
+            <View style={styles.headerRight}>
+              <TouchableOpacity style={styles.headerBtn} onPress={() => setFullscreenMode(true)}>
+                <MaterialIcons name="fullscreen" size={24} color={darkTheme ? '#fff' : '#333'} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerBtn} onPress={() => setSettingsModal(true)}>
+                <MaterialIcons name="settings" size={24} color={darkTheme ? '#fff' : '#333'} />
+              </TouchableOpacity>
+            </View>
           </View>
-          <View style={styles.headerRight}>
-            <TouchableOpacity onPress={() => setHistoryVisible(true)} style={styles.iconBtn}>
-              <MaterialIcons name="history" size={isSmallScreen ? 20 : 24} color={darkTheme ? '#fff' : '#333'} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconBtn}>
-              <MaterialIcons name="settings" size={isSmallScreen ? 20 : 24} color={darkTheme ? '#fff' : '#333'} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={undo} style={styles.iconBtn}>
-              <MaterialIcons name="undo" size={isSmallScreen ? 20 : 24} color={darkTheme ? '#fff' : '#333'} />
-            </TouchableOpacity>
+        )}
+
+        <View style={[styles.playingContent, fullscreenMode && styles.fullscreenContent]}>
+          <View style={[styles.playerGrid, { flexDirection: 'row', flexWrap: 'wrap' }]}>
+            {players.map((player, idx) => (
+              <TouchableOpacity
+                key={player.id}
+                style={[
+                  styles.playerCard,
+                  { backgroundColor: player.color, opacity: currentTurn === idx ? 1 : 0.7 },
+                  { width: playerCardWidth, marginHorizontal: 5, marginVertical: 8 },
+                ]}
+                activeOpacity={0.8}
+                onPress={() => addScore(player.id, 1)}
+              >
+                {currentTurn === idx && (
+                  <View style={styles.turnIndicator}>
+                    <MaterialIcons name="star" size={20} color="#FFD700" />
+                    <Text style={styles.turnText}>Your Turn</Text>
+                  </View>
+                )}
+
+                <Text style={styles.playerCardName}>{player.name}</Text>
+
+                <View style={styles.scoreDisplay}>
+                  <Text style={styles.scoreValue}>{player.score}</Text>
+                </View>
+
+                <View style={styles.cardActions}>
+                  <TouchableOpacity
+                    style={[styles.scoreAdjustBtn, styles.minusBtn]}
+                    onPress={() => addScore(player.id, -1)}
+                  >
+                    <MaterialIcons name="remove" size={20} color="#fff" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.scoreAdjustBtn, styles.plusBtn]}
+                    onPress={() => addScore(player.id, 1)}
+                  >
+                    <MaterialIcons name="add" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
-        <View style={[styles.scoreboardContainer, isLandscape && styles.scoreboardContainerLandscape]}>
-          {/* Player 1 */}
-          <View style={[styles.playerColumn, isLandscape && styles.playerColumnLandscape]}>
-            <Text style={[styles.playerLabel, darkTheme ? styles.labelLight : styles.labelDark, { fontSize: responsive.playerLabelFontSize }]}>{player1Name}</Text>
-            <View style={[styles.scoreDisplay, { width: responsive.scoreDisplaySize, height: responsive.scoreDisplaySize }]}>
-              <Text style={[styles.scoreText, { fontSize: responsive.scoreFontSize }]}>{player1Score}</Text>
-            </View>
-            <View style={[styles.buttonRowHorizontal, isLandscape && styles.buttonRowVertical]}>
-              <TouchableOpacity 
-                style={[styles.scoreButton, styles.plusButton, { width: responsive.buttonSize, height: responsive.buttonSize }]}
-                onPress={() => addScore(1, step)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="add" size={responsive.buttonIconSize} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.scoreButton, styles.minusButton, { width: responsive.buttonSize, height: responsive.buttonSize }]}
-                onPress={() => addScore(1, -step)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="remove" size={responsive.buttonIconSize} color="#fff" />
-              </TouchableOpacity>
-            </View>
+        {!fullscreenMode && (
+          <View style={styles.playingFooter}>
+            <TouchableOpacity style={styles.footerBtn} onPress={() => { setRound(r => r + 1); setCurrentTurn(0); Haptics.selectionAsync(); }}>
+              <MaterialIcons name="arrow-forward" size={24} color="#fff" />
+              <Text style={styles.footerBtnText}>Next Round</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.footerBtn, styles.endBtn]} onPress={endGame}>
+              <MaterialIcons name="stop-circle" size={24} color="#fff" />
+              <Text style={styles.footerBtnText}>End Game</Text>
+            </TouchableOpacity>
           </View>
+        )}
 
-          {/* Divider */}
-          <View style={[styles.divider, isLandscape && styles.dividerLandscape]} />
-
-          {/* Player 2 */}
-          <View style={[styles.playerColumn, isLandscape && styles.playerColumnLandscape]}>
-            <Text style={[styles.playerLabel, darkTheme ? styles.labelLight : styles.labelDark, { fontSize: responsive.playerLabelFontSize }]}>{player2Name}</Text>
-            <View style={[styles.scoreDisplay, { width: responsive.scoreDisplaySize, height: responsive.scoreDisplaySize }]}>
-              <Text style={[styles.scoreText, { fontSize: responsive.scoreFontSize }]}>{player2Score}</Text>
-            </View>
-            <View style={[styles.buttonRowHorizontal, isLandscape && styles.buttonRowVertical]}>
-              <TouchableOpacity 
-                style={[styles.scoreButton, styles.plusButton, { width: responsive.buttonSize, height: responsive.buttonSize }]}
-                onPress={() => addScore(2, step)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="add" size={responsive.buttonIconSize} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.scoreButton, styles.minusButton, { width: responsive.buttonSize, height: responsive.buttonSize }]}
-                onPress={() => addScore(2, -step)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="remove" size={responsive.buttonIconSize} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
-        <View style={[styles.footerRow, isLandscape && styles.footerRowLandscape]}>
-          <TouchableOpacity 
-            style={[styles.resetButton, isSmallScreen && styles.resetButtonSmall]}
-            onPress={resetScores}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="refresh" size={isSmallScreen ? 16 : 20} color="#fff" style={styles.resetIcon} />
-            <Text style={[styles.resetButtonText, isSmallScreen && { fontSize: 14 }]}>Reset</Text>
+        {fullscreenMode && (
+          <TouchableOpacity style={styles.exitFullscreen} onPress={() => setFullscreenMode(false)}>
+            <MaterialIcons name="fullscreen-exit" size={32} color="#fff" />
           </TouchableOpacity>
-
-          <View style={styles.stepDisplay}>
-            <Text style={[styles.stepText, darkTheme ? styles.stepTextLight : styles.stepTextDark]}>Step</Text>
-            <Text style={[styles.stepValue, darkTheme ? styles.stepTextLight : styles.stepTextDark]}>{step}</Text>
-          </View>
-        </View>
+        )}
 
         {/* Settings Modal */}
-        <Modal visible={settingsVisible} animationType="slide" onRequestClose={() => setSettingsVisible(false)}>
-          <View style={[styles.modalContainer, darkTheme ? styles.darkBg : styles.lightBg, { padding: responsive.modalPadding, paddingTop: isSmallScreen ? 40 : 60 }]}>
-            <Text style={[styles.modalTitle, darkTheme ? styles.headerTitleLight : styles.headerTitleDark, { fontSize: responsive.modalTitleFontSize }]}>Settings</Text>
-            <Text style={[styles.modalLabel, darkTheme ? styles.labelLight : styles.labelDark]}>Player 1 Name</Text>
-            <TextInput style={[styles.input, darkTheme ? styles.inputDark : styles.inputLight]} value={player1Name} onChangeText={setPlayer1Name} />
-            <Text style={[styles.modalLabel, darkTheme ? styles.labelLight : styles.labelDark]}>Player 2 Name</Text>
-            <TextInput style={[styles.input, darkTheme ? styles.inputDark : styles.inputLight]} value={player2Name} onChangeText={setPlayer2Name} />
+        <Modal visible={settingsModal} animationType="slide" transparent onRequestClose={() => setSettingsModal(false)}>
+          <View style={[styles.modalOverlay, darkTheme ? styles.darkBg : styles.lightBg]}>
+            <View style={[styles.modalContent, darkTheme ? { backgroundColor: '#16213e' } : { backgroundColor: '#fff' }]}>
+              <Text style={[styles.modalTitle, darkTheme ? styles.textLight : styles.textDark]}>Settings</Text>
 
-            <Text style={[styles.modalLabel, darkTheme ? styles.labelLight : styles.labelDark]}>Increment Step</Text>
-            <View style={styles.stepControls}>
-              <TouchableOpacity onPress={() => setStep((s) => Math.max(1, s-1))} style={styles.smallBtn}><MaterialIcons name="remove" size={isSmallScreen ? 16 : 20} color={darkTheme ? '#fff' : '#333'} /></TouchableOpacity>
-              <Text style={[styles.stepValueBig, darkTheme ? styles.stepTextLight : styles.stepTextDark]}>{step}</Text>
-              <TouchableOpacity onPress={() => setStep((s) => s+1)} style={styles.smallBtn}><MaterialIcons name="add" size={isSmallScreen ? 16 : 20} color={darkTheme ? '#fff' : '#333'} /></TouchableOpacity>
-            </View>
+              <View style={styles.settingItem}>
+                <Text style={[styles.settingLabel, darkTheme ? styles.textLight : styles.textDark]}>Dark Theme</Text>
+                <Switch value={darkTheme} onValueChange={setDarkTheme} />
+              </View>
 
-            <View style={styles.switchRow}>
-              <Text style={[styles.modalLabel, darkTheme ? styles.labelLight : styles.labelDark]}>Dark Theme</Text>
-              <Switch value={darkTheme} onValueChange={setDarkTheme} />
-            </View>
-
-            <View style={[styles.modalActions, isSmallScreen && styles.modalActionsSmall]}>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setSettingsVisible(false)}><Text style={styles.closeBtnText}>Done</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.closeModalBtn} onPress={() => setSettingsModal(false)}>
+                <Text style={styles.closeModalBtnText}>Close</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
 
-        {/* History Modal */}
-        <Modal visible={historyVisible} animationType="slide" onRequestClose={() => setHistoryVisible(false)}>
-          <View style={[styles.modalContainer, darkTheme ? styles.darkBg : styles.lightBg, { padding: responsive.modalPadding, paddingTop: isSmallScreen ? 40 : 60 }]}>
-            <Text style={[styles.modalTitle, darkTheme ? styles.headerTitleLight : styles.headerTitleDark, { fontSize: responsive.modalTitleFontSize }]}>Action History</Text>
-            <FlatList data={actionHistory} keyExtractor={(it) => String(it.time)} renderItem={({item}) => (
-              <View style={styles.historyItem}>
-                <Text style={[styles.historyText, darkTheme ? styles.labelLight : styles.labelDark]}>{item.note ? item.note : `${item.amount > 0 ? '+' : ''}${item.amount} ${item.player===1?player1Name: item.player===2?player2Name:'(system)'}`}</Text>
-                <Text style={[styles.historyTime, darkTheme ? styles.labelLight : styles.labelDark]}>{new Date(item.time).toLocaleString()}</Text>
-              </View>
-            )} ListEmptyComponent={() => <Text style={[styles.noHistory, darkTheme ? styles.labelLight : styles.labelDark]}>No history yet</Text>} />
+        {/* Stats Modal */}
+        <Modal visible={showStats} animationType="fade" transparent onRequestClose={() => setShowStats(false)}>
+          <View style={[styles.modalOverlay, darkTheme ? styles.darkBg : styles.lightBg]}>
+            <View style={[styles.modalContent, darkTheme ? { backgroundColor: '#16213e' } : { backgroundColor: '#fff' }]}>
+              <Text style={[styles.modalTitle, darkTheme ? styles.textLight : styles.textDark]}>Game Stats</Text>
 
-            <View style={[styles.modalActions, isSmallScreen && styles.modalActionsSmall]}>
-              <TouchableOpacity style={styles.clearBtn} onPress={clearHistory}><Text style={styles.clearBtnText}>Clear</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setHistoryVisible(false)}><Text style={styles.closeBtnText}>Close</Text></TouchableOpacity>
+              {players.map((player) => (
+                <View key={player.id} style={styles.statsItemContainer}>
+                  <View style={[styles.playerColorDot, { backgroundColor: player.color }]} />
+                  <View style={styles.statsItemContent}>
+                    <Text style={[styles.statsItemName, darkTheme ? styles.textLight : styles.textDark]}>{player.name}</Text>
+                    <Text style={[styles.statsItemScore, darkTheme ? styles.textLight : styles.textDark]}>Score: {player.score}</Text>
+                  </View>
+                </View>
+              ))}
+
+              <TouchableOpacity style={styles.closeModalBtn} onPress={() => setShowStats(false)}>
+                <Text style={styles.closeModalBtnText}>Close</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -254,145 +481,98 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  gradient: {
-    flex: 1,
-  },
-  header: {
-    alignItems: 'center',
-    paddingTop: 60,
-    paddingBottom: 30,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 15,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
-  headerTitleDark: { color: '#333' },
-  headerTitleLight: { color: '#fff' },
-  darkBg: { backgroundColor: '#14202b' },
-  lightBg: { backgroundColor: '#f6f9fc' },
-  scoreboardContainer: {
-    flex: 1,
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-  },
-  scoreboardContainerLandscape: { paddingHorizontal: 10 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 50, paddingHorizontal: 16 },
-  headerRowLandscape: { paddingTop: 20, paddingHorizontal: 8 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerRight: { flexDirection: 'row', alignItems: 'center' },
-  iconBtn: { padding: 8, marginLeft: 6 },
-  playerColumn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  playerColumnLandscape: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center' },
-  playerLabel: {
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
-  labelLight: { color: '#fff' },
-  labelDark: { color: '#333' },
-  scoreDisplay: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 20,
-    width: 140,
-    height: 140,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 30,
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  scoreText: {
-    fontSize: 72,
-    fontWeight: 'bold',
-    color: '#fff',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
-  buttonRowHorizontal: { flexDirection: 'row', gap: 16 },
-  buttonRowVertical: { flexDirection: 'column', gap: 12 },
-  scoreButton: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    elevation: 8,
-  },
-  plusButton: {
-    backgroundColor: '#27ae60',
-  },
-  minusButton: {
-    backgroundColor: '#e74c3c',
-  },
-  divider: {
-    width: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    marginHorizontal: 15,
-  },
-  dividerLandscape: { height: 2, width: '80%', marginVertical: 10 },
-  footerRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 24, paddingBottom: 40, alignItems: 'center' },
-  footerRowLandscape: { paddingHorizontal: 16, paddingBottom: 20 },
-  resetButton: {
-    backgroundColor: '#e74c3c',
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  resetButtonSmall: { paddingHorizontal: 12, paddingVertical: 8 },
-  resetIcon: {
-    marginRight: 8,
-  },
-  resetButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  stepDisplay: { alignItems: 'center' },
-  stepText: { fontSize: 12 },
-  stepTextLight: { color: '#fff' },
-  stepTextDark: { color: '#333' },
-  stepValue: { fontSize: 16, fontWeight: '700', color: '#fff' },
-  stepValueBig: { fontSize: 24, fontWeight: '700' },
-  
-  /* Modal styles */
-  modalContainer: { flex: 1, padding: 20, paddingTop: 60 },
-  modalTitle: { fontSize: 22, fontWeight: '700', marginBottom: 20 },
-  modalLabel: { fontSize: 14, marginTop: 12 },
-  input: { borderWidth: 1, borderColor: '#ccc', padding: 10, borderRadius: 10, marginTop: 8 },
-  inputDark: { borderColor: 'rgba(255,255,255,0.2)', color: '#fff' },
-  inputLight: { borderColor: '#ddd', color: '#333' },
-  stepControls: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8 },
-  smallBtn: { padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#ccc' },
-  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 24, gap: 12 },
-  modalActionsSmall: { gap: 8 },
-  closeBtn: { backgroundColor: '#2d9cdb', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8 },
-  closeBtnText: { color: '#fff', fontWeight: '700' },
-  clearBtn: { backgroundColor: '#e74c3c', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8 },
-  clearBtnText: { color: '#fff', fontWeight: '700' },
-  historyItem: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  historyText: { fontSize: 14 },
-  historyTime: { fontSize: 11, color: '#888' },
-  noHistory: { padding: 20, textAlign: 'center' },
+  container: { flex: 1 },
+  gradient: { flex: 1 },
+  darkBg: { backgroundColor: '#0f0f1e' },
+  lightBg: { backgroundColor: '#f5f7fa' },
+  textLight: { color: '#fff' },
+  textDark: { color: '#333' },
+  textLightSub: { color: 'rgba(255,255,255,0.7)' },
+  textDarkSub: { color: 'rgba(0,0,0,0.6)' },
+
+  // Setup Screen
+  setupHeader: { alignItems: 'center', paddingTop: 60, paddingBottom: 30 },
+  title: { fontSize: 32, fontWeight: '800', marginTop: 10 },
+  subtitle: { fontSize: 16, marginTop: 8 },
+  setupContent: { flex: 1 },
+  setupContentInner: { paddingHorizontal: 20, paddingBottom: 40 },
+  playerList: { marginBottom: 24 },
+  setupPlayerItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 12, marginBottom: 8 },
+  playerColorDot: { width: 20, height: 20, borderRadius: 10, marginRight: 12 },
+  setupPlayerName: { flex: 1, fontSize: 16, fontWeight: '600' },
+  removeBtn: { padding: 8 },
+  addPlayerSection: { backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 12, marginBottom: 24 },
+  playerInput: { padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1 },
+  inputDark: { backgroundColor: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.2)', color: '#fff' },
+  inputLight: { backgroundColor: '#fff', borderColor: '#ddd', color: '#333' },
+  addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2d9cdb', paddingVertical: 12, borderRadius: 8 },
+  addBtnText: { color: '#fff', fontSize: 16, fontWeight: '700', marginLeft: 8 },
+  setupActions: { marginTop: 20 },
+  startBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#27ae60', paddingVertical: 16, borderRadius: 12 },
+  startBtnText: { color: '#fff', fontSize: 18, fontWeight: '700', marginLeft: 8 },
+
+  // Playing Screen
+  playingHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 12 },
+  headerLeft: { flexDirection: 'row', gap: 8 },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerRight: { flexDirection: 'row', gap: 8 },
+  headerBtn: { padding: 8, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.1)' },
+  roundInfo: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 6, marginBottom: 4 },
+  roundLabel: { fontSize: 12, fontWeight: '700' },
+  timerDisplay: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  timerText: { fontSize: 14, fontWeight: '700' },
+  playingContent: { flex: 1, paddingHorizontal: 10, justifyContent: 'center' },
+  fullscreenContent: { paddingHorizontal: 0 },
+  playerGrid: { justifyContent: 'center' },
+  playerCard: { borderRadius: 16, padding: 16, overflow: 'hidden' },
+  turnIndicator: { position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.3)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  turnText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  playerCardName: { color: '#fff', fontSize: 14, fontWeight: '700', marginBottom: 8 },
+  scoreDisplay: { backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 8, paddingVertical: 8, marginBottom: 12, alignItems: 'center' },
+  scoreValue: { color: '#fff', fontSize: 36, fontWeight: '800' },
+  cardActions: { flexDirection: 'row', gap: 8 },
+  scoreAdjustBtn: { flex: 1, paddingVertical: 8, borderRadius: 6, alignItems: 'center' },
+  minusBtn: { backgroundColor: 'rgba(0,0,0,0.3)' },
+  plusBtn: { backgroundColor: 'rgba(255,255,255,0.3)' },
+
+  // Finished Screen
+  finishedContent: { paddingHorizontal: 20, paddingVertical: 40, alignItems: 'center' },
+  finishedHeader: { alignItems: 'center', marginBottom: 40 },
+  finishedTitle: { fontSize: 28, fontWeight: '800', marginVertical: 12 },
+  winnerName: { fontSize: 24, fontWeight: '800', marginBottom: 8 },
+  winnerScore: { fontSize: 18 },
+  tieNames: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 12 },
+  tieName: { fontSize: 16, fontWeight: '700' },
+  finalScores: { width: '100%', backgroundColor: 'rgba(255,255,255,0.08)', padding: 16, borderRadius: 12, marginBottom: 24 },
+  finalScoreItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
+  finalPlayerName: { flex: 1, fontSize: 16, fontWeight: '600' },
+  finalScore: { fontSize: 18, fontWeight: '700' },
+  gameStats: { width: '100%', marginBottom: 32 },
+  statLabel: { fontSize: 14, textAlign: 'center', marginVertical: 4 },
+  finishedActions: { flexDirection: 'row', gap: 12, width: '100%' },
+  newGameBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#27ae60', paddingVertical: 14, borderRadius: 10 },
+  newGameBtnText: { color: '#fff', fontSize: 16, fontWeight: '700', marginLeft: 8 },
+  editBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2d9cdb', paddingVertical: 14, borderRadius: 10 },
+  editBtnText: { color: '#fff', fontSize: 16, fontWeight: '700', marginLeft: 8 },
+
+  // Footer
+  playingFooter: { flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingBottom: 24 },
+  footerBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.15)', paddingVertical: 12, borderRadius: 10 },
+  footerBtnText: { color: '#fff', fontSize: 14, fontWeight: '700', marginLeft: 8 },
+  endBtn: { backgroundColor: '#e74c3c' },
+  exitFullscreen: { position: 'absolute', bottom: 20, right: 20, backgroundColor: 'rgba(0,0,0,0.5)', padding: 12, borderRadius: 25 },
+  fullscreen: { flex: 1 },
+
+  // Modals
+  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
+  modalTitle: { fontSize: 20, fontWeight: '800', marginBottom: 16 },
+  settingItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)' },
+  settingLabel: { fontSize: 16, fontWeight: '600' },
+  statsItemContainer: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
+  statsItemContent: { flex: 1 },
+  statsItemName: { fontSize: 14, fontWeight: '600' },
+  statsItemScore: { fontSize: 12, marginTop: 2 },
+  closeModalBtn: { marginTop: 16, paddingVertical: 12, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 8, alignItems: 'center' },
+  closeModalBtnText: { color: '#2d9cdb', fontSize: 16, fontWeight: '700' },
 });
